@@ -1,21 +1,11 @@
-# ============================================================
-# Unemployment Rate - Multiple Regression Analysis
-# ============================================================
-
-# --- 1. Install & Load Required Libraries ---
 library(tidyverse)
 library(cluster)
 library(factoextra)
 library(scales)
+library(plotly)
 
-
-
-# --- 2. Import Data ---
-df <- read_csv("UNEMPLOYED.csv")   # <-- change to your actual filename
-# ---- 3. Prepare Data for Clustering ----
-  
-  # Aggregate by Country (average across all years)
-  df_agg <- df %>%
+df <- read_csv("UNEMPLOYED.csv") 
+df_agg <- df %>%
   group_by(`Country Name`) %>%
   summarise(
     Unemployment_Rate = mean(`Unemployment Rate`, na.rm = TRUE),
@@ -24,30 +14,25 @@ df <- read_csv("UNEMPLOYED.csv")   # <-- change to your actual filename
     Industry          = mean(`Employment Sector: Industry`, na.rm = TRUE),
     Services          = mean(`Employment Sector: Services`, na.rm = TRUE)
   ) %>%
-  drop_na()  # Remove rows with missing values
+  drop_na()  
 
-# Save country names for labeling later
+# SCALING
+
 country_labels <- df_agg$`Country Name`
-
-# Scale the numeric features (important for K-Means)
-df_scaled <- df_agg %>%
-  select(-`Country Name`) %>%
-  scale()
+df_numeric <- df_agg[, -1]        
+df_scaled  <- scale(df_numeric)
 
 rownames(df_scaled) <- country_labels
 
-# ---- 4. Determine Optimal Number of Clusters ----
+# ELBOW + SILHOUETTE
 
-# Method 1: Elbow Method
 fviz_nbclust(df_scaled, kmeans, method = "wss") +
   labs(
-    title    = "Elbow Method — Optimal Number of Clusters",
-    subtitle = "Look for the 'elbow' where inertia stops dropping sharply",
+    title = "Elbow method",
     x        = "Number of Clusters (k)",
     y        = "Total Within-Cluster Sum of Squares"
   )
 
-# Method 2: Silhouette Method
 fviz_nbclust(df_scaled, kmeans, method = "silhouette") +
   labs(
     title    = "Silhouette Method — Optimal Number of Clusters",
@@ -56,35 +41,42 @@ fviz_nbclust(df_scaled, kmeans, method = "silhouette") +
     y        = "Average Silhouette Width"
   )
 
-# ---- 5. Run K-Means Clustering ----
-set.seed(123)  # For reproducibility
-k <- 3         # Adjust based on elbow/silhouette results
+set.seed(17)  
+k <- 3        
 
-kmeans_result <- kmeans(df_scaled, centers = k, nstart = 25)
+# CLUSTERING 
 
-# Add cluster labels back to aggregated data
+kmeans_result <- kmeans(df_scaled, centers = k)
 df_agg$Cluster <- as.factor(kmeans_result$cluster)
 
-cat("\n--- Cluster Sizes ---\n")
-print(table(df_agg$Cluster))
+levels(df_agg$Cluster) <- c(
+  "1" = "Low GDP, Service-Dominant",
+  "2" = "Low GDP, Agriculture-Dominant",
+  "3" = "High GDP, Service-Dominant"
+)
 
-# ---- 6. Cluster Summary ----
-cat("\n--- Cluster Means (Original Scale) ---\n")
-cluster_summary <- df_agg %>%
-  group_by(Cluster) %>%
-  summarise(
-    Count            = n(),
-    Avg_Unemployment = mean(Unemployment_Rate),
-    Avg_GDP          = mean(GDP),
-    Avg_Agriculture  = mean(Agriculture),
-    Avg_Industry     = mean(Industry),
-    Avg_Services     = mean(Services)
-  )
-print(cluster_summary)
 
-# ---- 7. Visualizations ----
+center_vals <- attr(df_scaled, "scaled:center")
+scale_vals <- attr(df_scaled, "scaled:scale")
 
-# 7a. Cluster Plot (PCA-reduced to 2D)
+centers_orig <- sweep(kmeans_result$centers, 2,
+                      scale_vals, "*") 
+centers_orig <- sweep(centers_orig, 2,
+                      center_vals, "+") 
+centers_orig <- as.data.frame(centers_orig)
+centers_orig$Cluster <- factor(
+  c("Low GDP, Service-Dominant",
+    "Low GDP, Agriculture-Dominant",
+    "High GDP, Service-Dominant")
+)
+colnames(centers_orig) <- c("Avg_Unemployment", "Avg_GDP", 
+                            "Avg_Agriculture", "Avg_Industry", 
+                            "Avg_Services", "Cluster")
+
+print(centers_orig)
+
+# PLOTTING
+
 fviz_cluster(kmeans_result,
              data        = df_scaled,
              geom        = "point",
@@ -95,12 +87,13 @@ fviz_cluster(kmeans_result,
   labs(
     title    = "K-Means Clustering of Countries",
     subtitle = "Based on Unemployment Rate, GDP, and Sectoral Employment (1990–2022)",
-    caption  = "Dimensionality reduced via PCA for visualization"
   )
 
-# 7b. Boxplot — Unemployment Rate by Cluster
-ggplot(df_agg, aes(x = Cluster, y = Unemployment_Rate, fill = Cluster)) +
-  geom_boxplot(alpha = 0.7) +
+
+p_unemp <- ggplot(df_agg, aes(x = Cluster, y = Unemployment_Rate, fill = Cluster,
+                              text = paste0("Country: ", `Country Name`,
+                                            "<br>Unemployment: ", round(Unemployment_Rate, 1), "%"))) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
   geom_jitter(width = 0.2, alpha = 0.5) +
   labs(
     title = "Unemployment Rate by Cluster",
@@ -110,11 +103,15 @@ ggplot(df_agg, aes(x = Cluster, y = Unemployment_Rate, fill = Cluster)) +
   theme_minimal() +
   theme(legend.position = "none")
 
-# 7c. Boxplot — GDP by Cluster
-ggplot(df_agg, aes(x = Cluster, y = GDP, fill = Cluster)) +
-  geom_boxplot(alpha = 0.7) +
+ggplotly(p_unemp, tooltip = "text")
+
+
+p <- ggplot(df_agg, aes(x = Cluster, y = GDP, fill = Cluster,
+                        text = paste0("Country: ", `Country Name`,
+                                      "<br>GDP: $", round(GDP / 1e9, 1), "B"))) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
   geom_jitter(width = 0.2, alpha = 0.5) +
-  scale_y_continuous(labels = label_dollar(scale = 1e-9, suffix = "B")) +
+  scale_y_log10(labels = label_dollar(scale = 1e-9, suffix = "B")) +  
   labs(
     title = "GDP by Cluster",
     x     = "Cluster",
@@ -123,13 +120,17 @@ ggplot(df_agg, aes(x = Cluster, y = GDP, fill = Cluster)) +
   theme_minimal() +
   theme(legend.position = "none")
 
-# 7d. Sectoral Employment by Cluster (stacked bar)
-cluster_long <- cluster_summary %>%
+ggplotly(p, tooltip = "text")
+
+cluster_long <- centers_orig %>%
   select(Cluster, Avg_Agriculture, Avg_Industry, Avg_Services) %>%
   pivot_longer(cols = -Cluster, names_to = "Sector", values_to = "Percentage") %>%
   mutate(Sector = str_remove(Sector, "Avg_"))
 
-ggplot(cluster_long, aes(x = Cluster, y = Percentage, fill = Sector)) +
+p_sector <- ggplot(cluster_long, aes(x = Cluster, y = Percentage, fill = Sector,
+                                     text = paste0("Cluster: ", Cluster,
+                                                   "<br>Sector: ", Sector,
+                                                   "<br>Proportion: ", round(Percentage, 1), "%"))) +
   geom_bar(stat = "identity", position = "fill", alpha = 0.85) +
   scale_y_continuous(labels = percent_format()) +
   labs(
@@ -140,12 +141,12 @@ ggplot(cluster_long, aes(x = Cluster, y = Percentage, fill = Sector)) +
   ) +
   theme_minimal()
 
-# ---- 8. List Countries per Cluster ----
-cat("\n--- Countries per Cluster ---\n")
-for (i in 1:k) {
-  cat(paste0("\nCluster ", i, ":\n"))
+cluster_names <- levels(df_agg$Cluster)
+
+for (cl in cluster_names) {
+  cat(paste0("\n", cl, ":\n"))
   countries <- df_agg %>%
-    filter(Cluster == i) %>%
+    filter(Cluster == cl) %>%
     pull(`Country Name`)
   cat(paste(countries, collapse = ", "), "\n")
 }
