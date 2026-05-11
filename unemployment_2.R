@@ -141,7 +141,13 @@ p_sector <- ggplot(cluster_long, aes(x = Cluster, y = Percentage, fill = Sector,
   ) +
   theme_minimal()
 
+ggplotly(p_sector, tooltip = "text")
+
 cluster_names <- levels(df_agg$Cluster)
+
+# Generate summary statistics for the aggregated dataset
+summary_stats <- summary(df_agg)
+print(summary_stats)
 
 for (cl in cluster_names) {
   cat(paste0("\n", cl, ":\n"))
